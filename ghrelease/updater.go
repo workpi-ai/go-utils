@@ -19,29 +19,39 @@ import (
 const (
 	defaultRequestTimeout  = 3 * time.Second
 	defaultDownloadTimeout = 30 * time.Second
-	defaultMetadataFile    = "metadata.json"
 	defaultDirPerm         = 0755
 	defaultFilePerm        = 0644
 )
 
-func NewUpdater(config UpdaterConfig) *Updater {
+func NewUpdater(config UpdaterConfig) (*Updater, error) {
+	if config.RepoOwner == "" {
+		return nil, fmt.Errorf("repo owner cannot be empty")
+	}
+	if config.RepoName == "" {
+		return nil, fmt.Errorf("repo name cannot be empty")
+	}
+	if len(config.Targets) == 0 {
+		return nil, fmt.Errorf("targets cannot be empty")
+	}
+	for i, target := range config.Targets {
+		if target.PathTransformer == nil {
+			return nil, fmt.Errorf("target[%d].PathTransformer cannot be nil", i)
+		}
+		if target.DestDir == "" {
+			return nil, fmt.Errorf("target[%d].DestDir cannot be empty", i)
+		}
+	}
 	if config.RequestTimeout == 0 {
 		config.RequestTimeout = defaultRequestTimeout
 	}
 	if config.DownloadTimeout == 0 {
 		config.DownloadTimeout = defaultDownloadTimeout
 	}
-	if config.MetadataFilename == "" {
-		config.MetadataFilename = defaultMetadataFile
-	}
-	if config.ExtractFilter == nil {
-		config.ExtractFilter = &AllFilesFilter{}
-	}
 
 	return &Updater{
 		config: config,
 		client: github.NewClient(nil),
-	}
+	}, nil
 }
 
 func (u *Updater) Update() error {
@@ -83,9 +93,7 @@ func (u *Updater) getLatestVersion() (string, error) {
 }
 
 func (u *Updater) getLocalVersion() string {
-	path := filepath.Join(u.config.DestDir, u.config.MetadataFilename)
-
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(u.config.MetadataFile)
 	if err != nil {
 		return ""
 	}
@@ -145,39 +153,52 @@ func (u *Updater) extractZip(r io.Reader) error {
 			continue
 		}
 
-		if !u.config.ExtractFilter.ShouldExtract(file.Name) {
-			continue
-		}
-
 		relPath := u.stripRootDir(file.Name)
 		if relPath == "" {
 			continue
 		}
 
-		destPath := filepath.Join(u.config.DestDir, relPath)
+		for _, target := range u.config.Targets {
+			destPath := target.PathTransformer.Transform(relPath)
+			if destPath == "" {
+				continue
+			}
 
-		if err = os.MkdirAll(filepath.Dir(destPath), defaultDirPerm); err != nil {
-			return err
-		}
+			fullPath := filepath.Join(target.DestDir, destPath)
 
-		rc, err := file.Open()
-		if err != nil {
-			return err
-		}
-		defer rc.Close()
-
-		f, err := os.Create(destPath)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-
-		if _, err := io.Copy(f, rc); err != nil {
-			return err
+			if err := u.extractFile(file, fullPath); err != nil {
+				return err
+			}
 		}
 	}
 
 	return nil
+}
+
+func (u *Updater) extractFile(file *zip.File, destPath string) error {
+	destPath = filepath.Clean(destPath)
+	if !filepath.IsAbs(destPath) {
+		return fmt.Errorf("destination path must be absolute: %s", destPath)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(destPath), defaultDirPerm); err != nil {
+		return err
+	}
+
+	rc, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+
+	f, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	_, err = io.Copy(f, rc)
+	return err
 }
 
 func (u *Updater) stripRootDir(filename string) string {
@@ -189,6 +210,10 @@ func (u *Updater) stripRootDir(filename string) string {
 }
 
 func (u *Updater) saveLocalVersion(version string) error {
+	if err := os.MkdirAll(filepath.Dir(u.config.MetadataFile), defaultDirPerm); err != nil {
+		return err
+	}
+
 	v := Metadata{
 		Version:     version,
 		LastCheckAt: time.Now().Format(time.RFC3339),
@@ -199,6 +224,5 @@ func (u *Updater) saveLocalVersion(version string) error {
 		return err
 	}
 
-	path := filepath.Join(u.config.DestDir, u.config.MetadataFilename)
-	return os.WriteFile(path, data, defaultFilePerm)
+	return os.WriteFile(u.config.MetadataFile, data, defaultFilePerm)
 }

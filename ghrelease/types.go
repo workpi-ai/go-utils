@@ -6,18 +6,22 @@ import (
 	"github.com/google/go-github/v68/github"
 )
 
-type UpdaterConfig struct {
-	RepoOwner          string
-	RepoName           string
-	DestDir            string
-	MetadataFilename   string
-	ExtractFilter      ExtractFilter
-	RequestTimeout     time.Duration
-	DownloadTimeout    time.Duration
+type ExtractTarget struct {
+	PathTransformer PathTransformer
+	DestDir         string
 }
 
-type ExtractFilter interface {
-	ShouldExtract(filename string) bool
+type UpdaterConfig struct {
+	RepoOwner       string
+	RepoName        string
+	MetadataFile    string
+	Targets         []ExtractTarget
+	RequestTimeout  time.Duration
+	DownloadTimeout time.Duration
+}
+
+type PathTransformer interface {
+	Transform(filename string) string
 }
 
 type Updater struct {
