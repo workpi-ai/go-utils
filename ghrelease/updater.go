@@ -62,7 +62,8 @@ func (u *Updater) Update() error {
 
 	localVersion := u.getLocalVersion()
 
-	if latestVersion == localVersion {
+	needsDownload := latestVersion != localVersion || u.needsRedownload()
+	if !needsDownload {
 		u.saveLocalVersion(localVersion)
 		return nil
 	}
@@ -199,6 +200,30 @@ func (u *Updater) extractFile(file *zip.File, destPath string) error {
 
 	_, err = io.Copy(f, rc)
 	return err
+}
+
+func (u *Updater) needsRedownload() bool {
+	for _, target := range u.config.Targets {
+		stat, err := os.Stat(target.DestDir)
+		if os.IsNotExist(err) {
+			return true
+		}
+		if err != nil {
+			return true
+		}
+		if !stat.IsDir() {
+			return true
+		}
+
+		entries, err := os.ReadDir(target.DestDir)
+		if err != nil {
+			return true
+		}
+		if len(entries) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (u *Updater) stripRootDir(filename string) string {
